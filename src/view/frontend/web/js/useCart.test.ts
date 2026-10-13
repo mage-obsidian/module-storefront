@@ -2,6 +2,7 @@
 //
 // SPDX-FileCopyrightText: 2024 Jeanmarcos Juarez
 // SPDX-License-Identifier: MIT
+import { withCookiesOff, NO_COOKIES_URL } from "../../../../Test/Js/cookiesOff.ts";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useCart, getFormKey } from "./useCart.ts";
 import { observeSectionMessages } from "./session-messages.ts";
@@ -365,5 +366,165 @@ describe("optimistic add", () => {
         await settled();
 
         expect(useCart().count.value).toBe(1);
+    });
+});
+
+describe("useCart with cookies off", () => {
+    it("sends the shopper to the no-cookies page and posts nothing", async () => {
+        const off = withCookiesOff();
+        const fetchMock = vi.fn();
+        vi.stubGlobal("fetch", fetchMock);
+
+        const result = await useCart().addRaw("https://shop.test/checkout/cart/add/", new FormData());
+
+        expect(result.ok).toBe(false);
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(off.visited).toEqual([NO_COOKIES_URL]);
+        off.restore();
+    });
+});
+
+describe("redirect to the cart after an add", () => {
+    const CART_URL = "https://shop.test/checkout/cart/";
+    let visited: string[];
+    let original: Location;
+
+    beforeEach(() => {
+        visited = [];
+        original = window.location;
+        Object.defineProperty(window, "location", {
+            value: { assign: (url: string) => visited.push(url), href: "https://shop.test/p.html", origin: "https://shop.test" },
+            writable: true,
+            configurable: true,
+        });
+        document.body.innerHTML = '<form action="/checkout/cart/add" data-add-to-cart></form>';
+    });
+
+    afterEach(() => {
+        Object.defineProperty(window, "location", { value: original, writable: true, configurable: true });
+    });
+
+    const answer = (payload: unknown) =>
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(payload) }));
+
+    it("follows the back url the core returns when the add succeeded", async () => {
+        answer({ backUrl: CART_URL });
+
+        const result = await useCart().addFromForm(document.querySelector("form"));
+
+        expect(result.ok).toBe(true);
+        expect(visited).toEqual([CART_URL]);
+    });
+
+    it("stays on the page when the core returned no back url", async () => {
+        answer({});
+
+        await useCart().addFromForm(document.querySelector("form"));
+
+        expect(visited).toEqual([]);
+    });
+
+    it("stays on the page when the add failed", async () => {
+        answer({ backUrl: CART_URL });
+        __setReloadResponse({ messages: { messages: [{ type: "error", text: "Out of stock" }] } });
+
+        const result = await useCart().addFromForm(document.querySelector("form"));
+
+        expect(result.ok).toBe(false);
+        expect(visited).toEqual([]);
+    });
+
+    it("does not follow a back url that leaves the store", async () => {
+        answer({ backUrl: "https://elsewhere.test/checkout/cart/" });
+
+        await useCart().addFromForm(document.querySelector("form"));
+
+        expect(visited).toEqual([]);
+    });
+
+    it("does not navigate after a quantity change", async () => {
+        answer({ backUrl: CART_URL });
+
+        await useCart().updateItemQty(15, 2, "/checkout/sidebar/updateItemQty");
+
+        expect(visited).toEqual([]);
+    });
+
+    it("tolerates a response without a body", async () => {
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+
+        const result = await useCart().addFromForm(document.querySelector("form"));
+
+        expect(result.ok).toBe(true);
+        expect(visited).toEqual([]);
+    });
+});
+
+describe("saving the options of a wish list item", () => {
+    const UPDATE_ACTION = "/wishlist/index/updateItemOptions/id/5/product/1/";
+    const LIST_URL = "https://shop.test/wishlist/index/index/wishlist_id/20/";
+    let visited: string[];
+    let original: Location;
+
+    beforeEach(() => {
+        visited = [];
+        original = window.location;
+        Object.defineProperty(window, "location", {
+            value: { assign: (url: string) => visited.push(url), href: "https://shop.test/p.html", origin: "https://shop.test" },
+            writable: true,
+            configurable: true,
+        });
+    });
+
+    afterEach(() => {
+        Object.defineProperty(window, "location", { value: original, writable: true, configurable: true });
+    });
+
+    const answerRedirected = (url: string, ok = true) =>
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok, redirected: true, url }));
+
+    it("lands on the page the core redirected to, leaving its message for that page", async () => {
+        answerRedirected(LIST_URL);
+
+        const result = await useCart().addRaw(UPDATE_ACTION, new FormData());
+
+        expect(result.ok).toBe(true);
+        expect(visited).toEqual([LIST_URL]);
+        expect(reload.calls).toEqual([]);
+    });
+
+    it("does not count the update as a product added to the cart", async () => {
+        __setSection("cart", { summary_count: 3 });
+        answerRedirected(LIST_URL);
+
+        const cart = useCart();
+        await cart.addRaw(UPDATE_ACTION, new FormData());
+
+        expect(cart.count.value).toBe(3);
+    });
+
+    it("does not follow a redirect that leaves the store", async () => {
+        answerRedirected("https://elsewhere.test/wishlist/");
+
+        await useCart().addRaw(UPDATE_ACTION, new FormData());
+
+        expect(visited).toEqual([]);
+    });
+
+    it("stays on the page when the redirected page failed to load", async () => {
+        answerRedirected(LIST_URL, false);
+
+        const result = await useCart().addRaw(UPDATE_ACTION, new FormData());
+
+        expect(result.ok).toBe(false);
+        expect(visited).toEqual([]);
+    });
+
+    it("does not follow the redirect of an ordinary add", async () => {
+        answerRedirected("https://shop.test/customer/account/login/");
+
+        await useCart().addRaw("/checkout/cart/add/product/1/", new FormData());
+
+        expect(visited).toEqual([]);
     });
 });

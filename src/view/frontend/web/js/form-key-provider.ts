@@ -12,16 +12,17 @@
  * Magento_PageCache/js/form-key-provider, and the single source of truth the
  * cart flow reads its form key from.
  */
+import { siteConfig, writeCookie } from 'mage-obsidian/runtime/cookies.ts';
+
 const COOKIE = 'form_key';
 const LENGTH = 16;
 const CHARS = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const INPUT_SELECTOR = 'input[name="form_key"]';
-const COOKIE_LIFETIME_MS = 86400000;
+const DEFAULT_COOKIE_LIFETIME_SECONDS = 86400;
 
-// Magento publishes cookie restrictions as a global; not a standard Window prop.
-interface CookiesConfig {
-    secure?: boolean;
-    samesite?: string;
+function lifetimeSeconds(): number {
+    const configured = siteConfig()?.cookie.lifetime ?? 0;
+    return configured > 0 ? configured : DEFAULT_COOKIE_LIFETIME_SECONDS;
 }
 
 function readCookie(): string {
@@ -44,14 +45,6 @@ function generate(): string {
     return key;
 }
 
-function writeCookie(value: string): void {
-    const config = (window as unknown as { cookiesConfig?: CookiesConfig }).cookiesConfig ?? {};
-    const secure = config.secure ? '; secure' : '';
-    const sameSite = `; samesite=${config.samesite || 'lax'}`;
-    const expires = `; expires=${new Date(Date.now() + COOKIE_LIFETIME_MS).toUTCString()}`;
-    document.cookie = `${COOKIE}=${value}${expires}; path=/${secure}${sameSite}`;
-}
-
 /**
  * Return the current form key, creating the cookie if absent. Reads nothing from
  * the DOM, so markup rendered at any point can ask for the live value instead of
@@ -63,7 +56,7 @@ export function getFormKey(): string {
         return existing;
     }
     const key = generate();
-    writeCookie(key);
+    writeCookie(COOKIE, key, { maxAgeSeconds: lifetimeSeconds() });
     return key;
 }
 

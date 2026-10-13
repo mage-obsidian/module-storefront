@@ -8,6 +8,7 @@
  * with its id and a post-data `remove_url`, so no plugin is needed (unlike
  * wishlist) and compare works for guests too.
  */
+import { requireCookies } from 'mage-obsidian/runtime/cookies.ts';
 import { computed } from 'vue';
 import { useCustomerData } from 'MageObsidian_ModernFrontend::js/customer-data';
 import events from 'MageObsidian_ModernFrontend::js/events';
@@ -19,8 +20,10 @@ import {
     type MutationEventName,
 } from 'mage-obsidian/runtime/mutationEvent.ts';
 
-interface CompareItem {
+export interface CompareItem {
     id: number | string;
+    name?: string;
+    product_url?: string;
     remove_url?: string;
 }
 
@@ -61,6 +64,9 @@ export function useCompare() {
         action: string,
         body: FormData,
     ): Promise<boolean> {
+        if (!requireCookies()) {
+            return false;
+        }
         if (!body.get('form_key')) {
             body.set('form_key', getFormKey());
         }

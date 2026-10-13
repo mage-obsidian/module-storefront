@@ -11,6 +11,7 @@
  * it — the reactive `count` (and everything else reading `section('cart')`)
  * updates everywhere, FPC-safe.
  */
+import { requireCookies } from 'mage-obsidian/runtime/cookies.ts';
 import { computed } from 'vue';
 import { useCustomerData } from 'MageObsidian_ModernFrontend::js/customer-data';
 import events from 'MageObsidian_ModernFrontend::js/events';
@@ -57,6 +58,7 @@ declare module 'mage-obsidian/runtime/eventManager.ts' {
 const CART_SECTION = 'cart';
 const SUMMARY_COUNT = 'summary_count';
 const QTY_FIELD = 'qty';
+const SAVED_ITEM_UPDATE = /\/wishlist\/index\/updateItemOptions\//;
 
 /**
  * Read Magento's form key. Re-exported from the provider rather than reading the
@@ -84,6 +86,27 @@ function toFormData(fields: Record<string, unknown>): FormData {
         }
     }
     return body;
+}
+
+function sameOriginUrl(url: string): string {
+    try {
+        const target = new URL(url, window.location.href);
+        return target.origin === window.location.origin ? target.href : '';
+    } catch {
+        return '';
+    }
+}
+
+async function readBackUrl(response: Response): Promise<string> {
+    if (typeof response.json !== 'function') {
+        return '';
+    }
+    try {
+        const payload = (await response.json()) as { backUrl?: unknown };
+        return typeof payload?.backUrl === 'string' ? sameOriginUrl(payload.backUrl) : '';
+    } catch {
+        return '';
+    }
 }
 
 export function useCart() {
@@ -118,6 +141,9 @@ export function useCart() {
      * caller so the toast can say what actually went wrong.
      */
     async function post(operation: CartOperation, action: string, body: FormData): Promise<CartResult> {
+        if (!requireCookies()) {
+            return { ok: false };
+        }
         if (!body.get('form_key')) {
             body.set('form_key', getFormKey());
         }
@@ -129,11 +155,14 @@ export function useCart() {
         if (request.cancelled) {
             return { ok: false, message: request.message };
         }
-        if (operation === CartOperation.Add) {
+        const updatesSavedItem = SAVED_ITEM_UPDATE.test(request.action);
+        if (operation === CartOperation.Add && !updatesSavedItem) {
             projectAdd(request.body);
         }
 
         let ok = false;
+        let backUrl = '';
+        let landedOn = '';
         try {
             const response = await fetch(request.action, {
                 method: 'POST',
@@ -142,8 +171,14 @@ export function useCart() {
                 credentials: 'same-origin',
             });
             ok = response.ok;
+            backUrl = await readBackUrl(response);
+            landedOn = response.redirected ? sameOriginUrl(response.url) : '';
         } catch {
             ok = false;
+        }
+        if (updatesSavedItem && ok && landedOn !== '') {
+            window.location.assign(landedOn);
+            return { ok: true };
         }
         await withSuppressedNotifications(() =>
             customerData.reload([CART_SECTION, MESSAGES_SECTION]),
@@ -160,6 +195,8 @@ export function useCart() {
                 ...request,
                 result,
             });
+        } else if (operation === CartOperation.Add && backUrl !== '') {
+            window.location.assign(backUrl);
         }
 
         return result;
